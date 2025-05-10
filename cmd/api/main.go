@@ -2,6 +2,13 @@ package main
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/hulupay/istar-api/config"
+	"github.com/hulupay/istar-api/internal/api"
+	"github.com/hulupay/istar-api/internal/client"
+	"github.com/hulupay/istar-api/internal/handlers"
+	"github.com/hulupay/istar-api/internal/middleware"
+	"github.com/hulupay/istar-api/internal/repositories"
+	"github.com/hulupay/istar-api/internal/services"
 	"github.com/hulupay/istar-api/pkg/logging"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
@@ -38,6 +45,7 @@ import (
 // @externalDocs.url          https://swagger.io/resources/open-api/
 func main() {
 
+	cfg := config.Load()
 	// Initialize logger
 	logger, err := zap.NewProduction()
 	if err != nil {
@@ -50,25 +58,29 @@ func main() {
 	router := gin.Default()
 	router.Use(gin.Recovery())
 	router.Use(logging.LoggerMiddleware(sugar))
+	router.Use(middleware.ErrorHandler(logger))
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	router.GET("/", func(c *gin.Context) {
 		c.String(http.StatusOK, "Hello, World!")
 	})
 
+	istarClient := client.NewIStarClient(cfg.IStarConfigVar, logger)
+	orderRepo := repositories.NewOrderRepository( /*db.Pool,*/ logger)
+	orderService := services.NewOrderService(orderRepo, istarClient, logger)
+
+	starHandler := handlers.NewStarHandler(orderService, istarClient, logger)
+	premiumHandler := handlers.NewPremiumHandler(orderService, istarClient, logger)
+	walletHandler := handlers.NewWalletHandler(istarClient, logger)
+	webhookHandler := handlers.NewWebhookHandler(orderRepo, cfg.WebhookSecret, logger)
+
+	router = api.SetupRouter(router, starHandler, premiumHandler, walletHandler, webhookHandler)
+
 	// Register health check endpoint
 	router.GET("/health", healthCheck)
 
-	// API routes
-	api := router.Group("/api/v1")
-	{
-		api.GET("/ping", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"message": "pong"})
-		})
-	}
-
 	// Configure server with timeouts
 	srv := &http.Server{
-		Addr:         ":" + "8080",
+		Addr:         ":" + cfg.ServerPort,
 		Handler:      router,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -103,12 +115,31 @@ func main() {
 
 // HealthCheck godoc
 // @Summary      Show the status of server
-// @Description  get the status of server
+// @Description  Retrieve the current status of the server
 // @Tags         health
 // @Accept       json
 // @Produce      json
 // @Success      200  {object}  map[string]interface{}
 // @Router       /health [get]
+
+// FindAllResources godoc
+// @Summary      Retrieve all resources
+// @Description  Get a complete list of all resources managed by the server
+// @Tags         resources
+// @Accept       json
+// @Produce      json
+// @Success      200  {array}  map[string]interface{}
+// @Failure      400  {object}  map[string]interface{}
+// @Router       /resources [get]
 func healthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// Add a placeholder route for finding all resources
+func FindAllResources(c *gin.Context) {
+	// Dummy logic, to be replaced with actual implementation.
+	c.JSON(http.StatusOK, []interface{}{
+		map[string]interface{}{"id": 1, "name": "Resource1"},
+		map[string]interface{}{"id": 2, "name": "Resource2"},
+	})
 }
